@@ -62,7 +62,7 @@ using nav2_util::geometry_utils::orientationAroundZAxis;
 AmclNode::AmclNode(const rclcpp::NodeOptions & options)
 : nav2_util::LifecycleNode("amcl", "", options)
 {
-  RCLCPP_INFO(get_logger(), "Creating");
+  RCLCPP_INFO(get_logger(), "Creating My Node");
 
   add_parameter(
     "alpha1", rclcpp::ParameterValue(0.2),
@@ -490,7 +490,7 @@ AmclNode::globalLocalizationCallback(
   RCLCPP_INFO(get_logger(), "Initializing with uniform distribution");
 
   pf_init_model(
-    pf_, (pf_init_model_fn_t)AmclNode::uniformPoseGenerator,
+    pf_, (pf_init_model_fn_t)AmclNode::gaussianPoseGenerator/*uniformPoseGenerator*/,
     reinterpret_cast<void *>(map_));
   RCLCPP_INFO(get_logger(), "Global initialisation done!");
   initial_pose_is_known_ = true;
@@ -629,7 +629,6 @@ AmclNode::laserReceived(sensor_msgs::msg::LaserScan::ConstSharedPtr laser_scan)
     }
     return;
   }
-
   std::string laser_scan_frame_id = nav2_util::strip_leading_slash(laser_scan->header.frame_id);
   last_laser_received_ts_ = now();
   int laser_index = -1;
@@ -908,6 +907,10 @@ AmclNode::getMaxWeightHyp(
       hyps[max_weight_hyp].pf_pose_mean.v[0],
       hyps[max_weight_hyp].pf_pose_mean.v[1],
       hyps[max_weight_hyp].pf_pose_mean.v[2]);
+    
+    temp_x = hyps[max_weight_hyp].pf_pose_mean.v[0];
+    temp_y = hyps[max_weight_hyp].pf_pose_mean.v[1];
+    temp_t = hyps[max_weight_hyp].pf_pose_mean.v[2];
 
     max_weight_hyps = hyps[max_weight_hyp];
     return true;
@@ -924,7 +927,7 @@ AmclNode::publishAmclPose(
   if (!initial_pose_is_known_) {
     if (checkElapsedTime(2s, last_time_printed_msg_)) {
       RCLCPP_WARN(
-        get_logger(), "AMCL cannot publish a pose or update the transform. "
+        get_logger(), "ASDFASDFASDFASD AMCL cannot publish a pose or update the transform. "
         "Please set the initial pose...");
       last_time_printed_msg_ = now();
     }
@@ -1498,6 +1501,7 @@ AmclNode::initTransforms()
 void
 AmclNode::initMessageFilters()
 {
+  RCLCPP_INFO(get_logger(), "ASDFASDFASDFASDF initMessageFilters");
   auto sub_opt = rclcpp::SubscriptionOptions();
   sub_opt.callback_group = callback_group_;
   laser_scan_sub_ = std::make_unique<message_filters::Subscriber<sensor_msgs::msg::LaserScan,
@@ -1509,8 +1513,7 @@ AmclNode::initMessageFilters()
     get_node_logging_interface(),
     get_node_clock_interface(),
     transform_tolerance_);
-
-
+  
   laser_scan_connection_ = laser_scan_filter_->registerCallback(
     std::bind(
       &AmclNode::laserReceived,
@@ -1590,7 +1593,7 @@ AmclNode::initParticleFilter()
   // Create the particle filter
   pf_ = pf_alloc(
     min_particles_, max_particles_, alpha_slow_, alpha_fast_,
-    (pf_init_model_fn_t)AmclNode::uniformPoseGenerator);
+    (pf_init_model_fn_t)AmclNode::gaussianPoseGenerator/*uniformPoseGenerator*/);
   pf_->pop_err = pf_err_;
   pf_->pop_z = pf_z_;
 
@@ -1619,7 +1622,50 @@ AmclNode::initLaserScan()
   last_laser_received_ts_ = rclcpp::Time(0);
 }
 
+double gaussianRandom(double average, double stdev) {
+  double v1, v2, s, temp;
+
+  do {
+    v1 = 2 * ((double) rand() / RAND_MAX) - 1;   // -1.0 ~ 1.0까지의 값
+    v2 = 2 * ((double) rand() / RAND_MAX) - 1;   // -1.0 ~ 1.0까지의 값
+    s = v1 * v1 + v2 * v2;
+  } while ( s >= 1 || s == 0);
+  
+  s = sqrt( (-2 * log(s)) / s);
+
+  temp = v1 * s;
+  temp = (stdev * temp) + average;
+
+  return temp;
+}
+
+pf_vector_t
+AmclNode::gaussianPoseGenerator(void * arg)
+{
+  map_t* map = (map_t*)arg;
+
+  pf_vector_t p;
+  // RCLCPP_DEBUG(get_logger(), "Generating new gaussian sample");
+  for(;;)
+  {
+    p.v[0] = temp_x + gaussianRandom(0, 0.75);  // 가우시안 랜덤 함수를 통해 얻은 값을 특정 파티클의 pose에 추가하여 리턴합니다. 
+    p.v[1] = temp_y + gaussianRandom(0, 0.75);  // 실험에서 얻은 로봇의 오차가 평균 약 75cm였으므로, 이에 해당하는 값 0.75를 현재 로봇의 pose에 더해서 사용합니다.
+    p.v[2] = temp_t + gaussianRandom(0, 0.1) * 2 * 3.141592 * 0.05;
+    //Check that it's a free cell
+    int i,j;
+    i = MAP_GXWX(map, p.v[0]);
+    j = MAP_GYWY(map, p.v[1]);
+    if(MAP_VALID(map,i,j) && (map->cells[MAP_INDEX(map,i,j)].occ_state == -1))
+      break;
+  }
+//  #endif
+  return p;
+}
 }  // namespace nav2_amcl
+
+
+
+
 
 #include "rclcpp_components/register_node_macro.hpp"
 

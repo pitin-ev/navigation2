@@ -51,6 +51,10 @@
 
 #define NEW_UNIFORM_SAMPLING 1
 
+double temp_x = 0.0;
+double temp_y = 0.0;
+double temp_t = 0.0;
+
 namespace nav2_amcl
 {
 /*
@@ -265,6 +269,7 @@ protected:
    * @brief Pose-generating function used to uniformly distribute particles over the map
    */
   static pf_vector_t uniformPoseGenerator(void * arg);
+  static pf_vector_t gaussianPoseGenerator(void * arg);
   pf_t * pf_{nullptr};
   bool pf_init_;
   pf_vector_t pf_odom_pose_;
