@@ -38,5 +38,9 @@
       <description>Penalize trajectories with rotational velocities
       </description>
     </class>
+    <class type="dwb_critics::SpinForwardCritic" base_class_type="dwb_core::TrajectoryCritic">
+      <description>Favor spin-forward (forward motion with concurrent yaw) by minimizing curvature deviation (κ=|Δθ|/Δs) and penalizing backward/low-progress motion; optionally disabled near goal.
+      </description>
+    </class>
   </library>
 </class_libraries>
