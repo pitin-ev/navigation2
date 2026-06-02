@@ -45,5 +45,13 @@
       <description>mppi critic for restricting command velocities in deadband range</description>
     </class>
 
+    <class type="mppi::critics::YawDriftCritic" base_class_type="mppi::critics::CriticFunction">
+      <description>mppi critic that holds body yaw to the current value (omni default yaw force)</description>
+    </class>
+
+    <class type="mppi::critics::GoalYawCritic" base_class_type="mppi::critics::CriticFunction">
+      <description>mppi critic for distance-modulated goal-yaw alignment (smooth ramp near goal)</description>
+    </class>
+
   </library>
 </class_libraries>
