@@ -279,6 +279,10 @@ bool CollisionMonitor::getParameters(
   stop_pub_timeout_ =
     rclcpp::Duration::from_seconds(get_parameter("stop_pub_timeout").as_double());
 
+  nav2_util::declare_parameter_if_not_declared(
+    node, "approach_speed_increase_rate", rclcpp::ParameterValue(0.0));
+  approach_speed_increase_rate_ = get_parameter("approach_speed_increase_rate").as_double();
+
   if (
     !configureSources(
       base_frame_id, odom_frame_id, transform_tolerance, source_timeout, base_shift_correction))
@@ -584,7 +588,7 @@ bool CollisionMonitor::processApproach(
   const std::shared_ptr<Polygon> polygon,
   const std::unordered_map<std::string, std::vector<Point>> & sources_collision_points_map,
   const Velocity & velocity,
-  Action & robot_action) const
+  Action & robot_action)
 {
   if (!polygon->isShapeSet()) {
     return false;
@@ -593,9 +597,36 @@ bool CollisionMonitor::processApproach(
   // Obtain time before a collision
   const double collision_time = polygon->getCollisionTime(sources_collision_points_map, velocity);
   if (collision_time >= 0.0) {
-    // If collision will occurr, reduce robot speed
     const double change_ratio = collision_time / polygon->getTimeBeforeCollision();
-    const Velocity safe_vel = velocity * change_ratio;
+    Velocity safe_vel = velocity * change_ratio;
+
+    // Rate-limit the output speed (not ratio): output speed can decrease immediately (safety)
+    // but can only increase at approach_speed_increase_rate_ m/s per second.
+    if (approach_speed_increase_rate_ > 0.0 && prev_approach_speed_ >= 0.0) {
+      const rclcpp::Time now = this->now();
+      const double dt = (now - prev_approach_time_).seconds();
+      prev_approach_time_ = now;
+
+      if (dt > 0.0 && dt < 1.0) {
+        const double new_speed = std::sqrt(
+          safe_vel.x * safe_vel.x + safe_vel.y * safe_vel.y + safe_vel.tw * safe_vel.tw);
+        if (new_speed > prev_approach_speed_) {
+          const double max_speed = prev_approach_speed_ + approach_speed_increase_rate_ * dt;
+          if (new_speed > max_speed && new_speed > 1e-6) {
+            const double scale = max_speed / new_speed;
+            safe_vel = safe_vel * scale;
+          }
+        }
+      }
+    }
+
+    // Update tracked output speed
+    prev_approach_speed_ = std::sqrt(
+      safe_vel.x * safe_vel.x + safe_vel.y * safe_vel.y + safe_vel.tw * safe_vel.tw);
+    if (approach_speed_increase_rate_ > 0.0) {
+      prev_approach_time_ = this->now();
+    }
+
     // Check that currently calculated velocity is safer than
     // chosen for previous shapes one
     if (safe_vel < robot_action.req_vel) {
@@ -603,6 +634,19 @@ bool CollisionMonitor::processApproach(
       robot_action.action_type = APPROACH;
       robot_action.req_vel = safe_vel;
       return true;
+    }
+  } else {
+    // No collision detected: decay tracked speed upward so it doesn't stick at a low value
+    if (approach_speed_increase_rate_ > 0.0 && prev_approach_speed_ >= 0.0) {
+      const rclcpp::Time now = this->now();
+      const double dt = (now - prev_approach_time_).seconds();
+      prev_approach_time_ = now;
+
+      if (dt > 0.0 && dt < 1.0) {
+        prev_approach_speed_ += approach_speed_increase_rate_ * dt;
+      }
+    } else {
+      prev_approach_speed_ = -1.0;  // Reset: no previous data
     }
   }
 

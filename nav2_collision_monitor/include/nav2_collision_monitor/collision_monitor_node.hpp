@@ -186,7 +186,7 @@ protected:
     const std::shared_ptr<Polygon> polygon,
     const std::unordered_map<std::string, std::vector<Point>> & sources_collision_points_map,
     const Velocity & velocity,
-    Action & robot_action) const;
+    Action & robot_action);
 
   /**
    * @brief Log and publish current robot action and polygon
@@ -253,6 +253,12 @@ protected:
   rclcpp::Time stop_stamp_;
   /// @brief Timeout after which 0-velocity ceases to be published
   rclcpp::Duration stop_pub_timeout_;
+
+  /// @brief Approach output speed rate-limiting: previous output speed and timestamp
+  double prev_approach_speed_{-1.0};
+  rclcpp::Time prev_approach_time_{0, 0, RCL_ROS_TIME};
+  /// @brief Maximum rate at which approach output speed can increase (m/s per second, 0=disabled)
+  double approach_speed_increase_rate_{0.0};
 };  // class CollisionMonitor
 
 }  // namespace nav2_collision_monitor
