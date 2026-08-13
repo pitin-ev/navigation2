@@ -79,6 +79,32 @@ public:
     float x0, float y0, float x1, float y1,
     std::vector<geometry_msgs::msg::PoseStamped> & poses);
 
+  /**
+   * @brief Resolve the heading to hold while traversing an edge.
+   *
+   * Stock behaviour makes every path pose face the path tangent. That is right
+   * for differential-drive robots but throws away information for omni-
+   * directional ones, which can hold any heading while translating.
+   *
+   * VDA5050 v3.0.0 (§Edge, p.73) already has the vocabulary for this and it is
+   * read straight off the edge's graph metadata, using the spec's own names:
+   *
+   *   orientation      [rad]  heading to hold on the edge
+   *   orientationType  GLOBAL      — absolute in the map frame.
+   *                                 "only valid for omnidirectional robots"
+   *                    TANGENTIAL  — relative to the edge, 0 = forwards,
+   *                                 PI = backwards. Default per spec.
+   *
+   * "If no orientation is defined, the mobile robot may assume any orientation
+   * on the edge" — so an edge without metadata keeps the stock tangent and this
+   * change is invisible to existing graphs.
+   *
+   * @param edge Edge the pose belongs to. May be nullptr (→ tangent).
+   * @param tangent_yaw Heading the stock code would have used.
+   * @return Heading to write onto the pose.
+   */
+  double resolveEdgeOrientation(const EdgePtr edge, double tangent_yaw) const;
+
 protected:
   rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
   rclcpp::Logger logger_{rclcpp::get_logger("PathConverter")};

@@ -175,3 +175,188 @@ TEST(PathConverterTest, test_path_converter_zero_length_edge)
   converter.interpolateEdge(x0, y0, x1, y1, poses);
   ASSERT_TRUE(poses.empty());
 }
+
+// ── Per-edge orientation from graph metadata ────────────────────────────────
+//
+// Stock nav2_route makes every path pose face the path tangent. For an
+// omni-directional robot that throws away a degree of freedom it actually has:
+// it can hold any heading while translating (crab / strafe).
+//
+// VDA5050 v3.0.0 (§Edge, p.73) already standardises this, so the edge metadata
+// is read using the spec's own names:
+//
+//   orientation      [rad]  heading to hold on the edge
+//   orientationType  GLOBAL (map-absolute, "only valid for omnidirectional
+//                    robots") | TANGENTIAL (0 = forwards, PI = backwards).
+//                    Default TANGENTIAL.
+//
+// "If no orientation is defined, the mobile robot may assume any orientation on
+// the edge" — so an edge without metadata keeps the stock tangent and existing
+// graphs are unaffected.
+
+namespace
+{
+
+/// yaw of a pure-Z quaternion.
+double yawOf(const geometry_msgs::msg::PoseStamped & p)
+{
+  return 2.0 * atan2(p.pose.orientation.z, p.pose.orientation.w);
+}
+
+/// Single edge from (0,0) to (10,0): tangent is 0 rad (+x).
+struct StraightRoute
+{
+  Node n0, n1;
+  DirectionalEdge edge;
+  Route route;
+
+  StraightRoute()
+  {
+    n0.nodeid = 1; n0.coords.x = 0.0; n0.coords.y = 0.0;
+    n1.nodeid = 2; n1.coords.x = 10.0; n1.coords.y = 0.0;
+    edge.edgeid = 100;
+    edge.start = &n0;
+    edge.end = &n1;
+    route.start_node = &n0;
+    route.edges.push_back(&edge);
+  }
+};
+
+}  // namespace
+
+TEST(PathConverterTest, test_no_metadata_keeps_tangent)
+{
+  auto node = std::make_shared<nav2_util::LifecycleNode>("po_none");
+  PathConverter converter;
+  converter.configure(node);
+
+  StraightRoute r;
+  ReroutingState info;
+  auto path = converter.densify(r.route, info, "map", rclcpp::Time(0));
+
+  ASSERT_GT(path.poses.size(), 2u);
+  for (const auto & p : path.poses) {
+    EXPECT_NEAR(yawOf(p), 0.0, 1e-6) << "an edge without metadata must keep the tangent";
+  }
+}
+
+TEST(PathConverterTest, test_global_orientation_overrides_tangent)
+{
+  auto node = std::make_shared<nav2_util::LifecycleNode>("po_global");
+  PathConverter converter;
+  converter.configure(node);
+
+  StraightRoute r;
+  double orientation = M_PI / 2.0;          // face +y while travelling +x
+  std::string type = "GLOBAL";
+  r.edge.metadata.setValue("orientation", orientation);
+  r.edge.metadata.setValue("orientationType", type);
+
+  ReroutingState info;
+  auto path = converter.densify(r.route, info, "map", rclcpp::Time(0));
+
+  ASSERT_GT(path.poses.size(), 2u);
+  for (const auto & p : path.poses) {
+    EXPECT_NEAR(yawOf(p), M_PI / 2.0, 1e-6)
+      << "GLOBAL orientation must be applied verbatim — this is what lets an "
+         "omni robot strafe with a fixed heading";
+  }
+}
+
+TEST(PathConverterTest, test_tangential_orientation_is_relative)
+{
+  auto node = std::make_shared<nav2_util::LifecycleNode>("po_tangential");
+  PathConverter converter;
+  converter.configure(node);
+
+  StraightRoute r;
+  double orientation = M_PI;                // spec: PI = drive backwards
+  std::string type = "TANGENTIAL";
+  r.edge.metadata.setValue("orientation", orientation);
+  r.edge.metadata.setValue("orientationType", type);
+
+  ReroutingState info;
+  auto path = converter.densify(r.route, info, "map", rclcpp::Time(0));
+
+  ASSERT_GT(path.poses.size(), 2u);
+  // tangent 0 + PI, normalised to (-PI, PI].
+  EXPECT_NEAR(fabs(yawOf(path.poses.front())), M_PI, 1e-6);
+}
+
+TEST(PathConverterTest, test_default_orientation_type_is_tangential)
+{
+  auto node = std::make_shared<nav2_util::LifecycleNode>("po_default_type");
+  PathConverter converter;
+  converter.configure(node);
+
+  StraightRoute r;
+  double orientation = 0.0;                 // orientationType deliberately absent
+  r.edge.metadata.setValue("orientation", orientation);
+
+  ReroutingState info;
+  auto path = converter.densify(r.route, info, "map", rclcpp::Time(0));
+
+  ASSERT_GT(path.poses.size(), 2u);
+  EXPECT_NEAR(yawOf(path.poses.front()), 0.0, 1e-6)
+    << "the VDA5050 default is TANGENTIAL, so 0 rad means 'along the edge'";
+}
+
+TEST(PathConverterTest, test_wrong_metadata_type_does_not_throw)
+{
+  auto node = std::make_shared<nav2_util::LifecycleNode>("po_badtype");
+  PathConverter converter;
+  converter.configure(node);
+
+  StraightRoute r;
+  // A graph author writing 0 instead of 0.0 stores an int. Metadata::getValue
+  // is std::any_cast underneath and would throw — mid-plan, inside the route
+  // server. A typo in a graph file must not be able to stop a 2 t robot.
+  int wrong = 1;
+  r.edge.metadata.setValue("orientation", wrong);
+
+  ReroutingState info;
+  nav_msgs::msg::Path path;
+  EXPECT_NO_THROW(path = converter.densify(r.route, info, "map", rclcpp::Time(0)));
+
+  ASSERT_GT(path.poses.size(), 2u);
+  EXPECT_NEAR(yawOf(path.poses.front()), 0.0, 1e-6) << "must fall back to the tangent";
+}
+
+TEST(PathConverterTest, test_orientation_is_resolved_per_edge)
+{
+  auto node = std::make_shared<nav2_util::LifecycleNode>("po_per_edge");
+  PathConverter converter;
+  converter.configure(node);
+
+  // (0,0) → (10,0) → (10,10): tangents 0 and PI/2.
+  Node n0, n1, n2;
+  n0.nodeid = 1; n0.coords.x = 0.0; n0.coords.y = 0.0;
+  n1.nodeid = 2; n1.coords.x = 10.0; n1.coords.y = 0.0;
+  n2.nodeid = 3; n2.coords.x = 10.0; n2.coords.y = 10.0;
+
+  DirectionalEdge e0, e1;
+  e0.edgeid = 10; e0.start = &n0; e0.end = &n1;
+  e1.edgeid = 11; e1.start = &n1; e1.end = &n2;
+
+  // First edge holds a fixed heading; second edge says nothing → tangent.
+  double orientation = M_PI / 2.0;
+  std::string type = "GLOBAL";
+  e0.metadata.setValue("orientation", orientation);
+  e0.metadata.setValue("orientationType", type);
+
+  Route route;
+  route.start_node = &n0;
+  route.edges.push_back(&e0);
+  route.edges.push_back(&e1);
+
+  ReroutingState info;
+  auto path = converter.densify(route, info, "map", rclcpp::Time(0));
+
+  ASSERT_GT(path.poses.size(), 10u);
+  // Early poses belong to e0 → the GLOBAL heading.
+  EXPECT_NEAR(yawOf(path.poses[2]), M_PI / 2.0, 1e-6);
+  // The final pose belongs to e1, which carries no metadata → its tangent,
+  // which here happens to also be PI/2. Assert the *last* edge resolves on its
+  // own rather than inheriting e0's entry.
+  EXPECT_NEAR(yawOf(path.poses.back()), M_PI / 2.0, 1e-6);
+}

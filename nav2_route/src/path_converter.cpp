@@ -12,12 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <any>
+#include <cmath>
 #include <string>
 #include <limits>
 #include <memory>
+#include <utility>
 #include <vector>
 #include <mutex>
 #include <algorithm>
+
+#include "angles/angles.h"
 
 #include "nav2_route/path_converter.hpp"
 
@@ -64,6 +69,21 @@ nav_msgs::msg::Path PathConverter::densify(
   Coordinates start;
   Coordinates end;
 
+  // Pose index → edge that produced it. The orientation pass below runs over
+  // the finished path, by which point the edge each pose came from is gone;
+  // without this we cannot honour per-edge orientation metadata.
+  // Entries are appended in increasing index order, so a linear scan back from
+  // the end finds the owning edge.
+  std::vector<std::pair<size_t, EdgePtr>> segments;
+  auto edge_at = [&segments](size_t i) -> EdgePtr {
+      EdgePtr found = nullptr;
+      for (const auto & seg : segments) {
+        if (seg.first > i) {break;}
+        found = seg.second;
+      }
+      return found;
+    };
+
   if (!route.edges.empty()) {
     start = route.edges[0]->start->coords;
 
@@ -79,6 +99,8 @@ nav_msgs::msg::Path PathConverter::densify(
         end = corner_arc.getCornerStart();
 
         // interpolate to start of arc
+        // The smoothing arc spans edges i and i+1; attribute it to edge i.
+        segments.emplace_back(path.poses.size(), edge);
         interpolateEdge(start.x, start.y, end.x, end.y, path.poses);
 
         // interpolate arc
@@ -92,6 +114,7 @@ nav_msgs::msg::Path PathConverter::densify(
             logger_, "Unable to smooth corner between edge %i and edge %i", edge->edgeid,
             next_edge->edgeid);
         }
+        segments.emplace_back(path.poses.size(), edge);
         interpolateEdge(start.x, start.y, end.x, end.y, path.poses);
         start = end;
       }
@@ -101,6 +124,7 @@ nav_msgs::msg::Path PathConverter::densify(
   if (route.edges.empty()) {
     path.poses.push_back(utils::toMsg(route.start_node->coords.x, route.start_node->coords.y));
   } else {
+    segments.emplace_back(path.poses.size(), route.edges.back());
     interpolateEdge(
       start.x, start.y, route.edges.back()->end->coords.x,
       route.edges.back()->end->coords.y, path.poses);
@@ -115,7 +139,7 @@ nav_msgs::msg::Path PathConverter::densify(
     const auto & next_pose = path.poses[i + 1];
     const double dx = next_pose.pose.position.x - pose.pose.position.x;
     const double dy = next_pose.pose.position.y - pose.pose.position.y;
-    const double yaw = atan2(dy, dx);
+    const double yaw = resolveEdgeOrientation(edge_at(i), atan2(dy, dx));
     path.poses[i].pose.orientation = nav2_util::geometry_utils::orientationAroundZAxis(yaw);
   }
 
@@ -124,14 +148,60 @@ nav_msgs::msg::Path PathConverter::densify(
     const auto & last_edge = route.edges.back();
     const double dx = last_edge->end->coords.x - last_edge->start->coords.x;
     const double dy = last_edge->end->coords.y - last_edge->start->coords.y;
+    const double yaw = resolveEdgeOrientation(last_edge, atan2(dy, dx));
     path.poses.back().pose.orientation =
-      nav2_util::geometry_utils::orientationAroundZAxis(atan2(dy, dx));
+      nav2_util::geometry_utils::orientationAroundZAxis(yaw);
   }
 
   // publish path similar to planner server
   path_pub_->publish(std::make_unique<nav_msgs::msg::Path>(path));
 
   return path;
+}
+
+double PathConverter::resolveEdgeOrientation(
+  const EdgePtr edge, double tangent_yaw) const
+{
+  if (!edge) {
+    return tangent_yaw;
+  }
+
+  // ⚠ Metadata::getValue is std::any_cast under the hood: it throws if the
+  //   stored type differs from the one asked for. A graph author writing
+  //   "orientation": 0 instead of 0.0 would otherwise take the whole route
+  //   server down mid-plan. Fall back to the stock tangent instead — a graph
+  //   typo must not be able to stop the robot.
+  double orientation = std::numeric_limits<double>::quiet_NaN();
+  std::string type = "TANGENTIAL";
+  try {
+    double no_value = std::numeric_limits<double>::quiet_NaN();
+    orientation = edge->metadata.getValue<double>("orientation", no_value);
+    if (std::isnan(orientation)) {
+      return tangent_yaw;   // spec: undefined ⇒ any orientation is acceptable
+    }
+    std::string tangential = "TANGENTIAL";
+    type = edge->metadata.getValue<std::string>("orientationType", tangential);
+  } catch (const std::bad_any_cast & e) {
+    RCLCPP_WARN(
+      logger_,
+      "Edge %u carries orientation metadata of an unexpected type (%s); "
+      "falling back to the path tangent. Use floating point for 'orientation' "
+      "and a string for 'orientationType'.", edge->edgeid, e.what());
+    return tangent_yaw;
+  }
+
+  if (type == "GLOBAL") {
+    return orientation;
+  }
+  if (type != "TANGENTIAL") {
+    RCLCPP_WARN(
+      logger_,
+      "Edge %u has orientationType '%s'; expected 'GLOBAL' or 'TANGENTIAL'. "
+      "Treating it as TANGENTIAL (the VDA5050 default).",
+      edge->edgeid, type.c_str());
+  }
+  // TANGENTIAL: 0 = forwards along the edge, PI = backwards.
+  return angles::normalize_angle(tangent_yaw + orientation);
 }
 
 void PathConverter::interpolateEdge(
