@@ -127,6 +127,17 @@ protected:
   std::shared_ptr<ActionServerTrack> action_server_;
   std::unique_ptr<OperationsManager> operations_manager_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+
+  /// Mirror of the action feedback onto a plain topic.
+  ///
+  /// Action feedback only reaches the client that owns the goal — here the
+  /// bt_navigator. Anything else that needs to know which node/edge the robot
+  /// is on (the fleet adapter reporting VDA5050 lastNodeId / nodeStates /
+  /// edgeStates, a supervisor, a recorder) has no way to get at it.
+  ///
+  /// The action's own Feedback type is published verbatim, so this adds no
+  /// message schema and cannot drift from what the action reports.
+  rclcpp_lifecycle::LifecyclePublisher<Feedback>::SharedPtr state_pub_;
 };
 
 }  // namespace nav2_route

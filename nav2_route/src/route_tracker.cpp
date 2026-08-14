@@ -45,6 +45,18 @@ void RouteTracker::configure(
     node, "aggregate_blocked_ids", rclcpp::ParameterValue(false));
   aggregate_blocked_ids_ = node->get_parameter("aggregate_blocked_ids").as_bool();
 
+  // Mirror the action feedback onto a topic so consumers other than the
+  // goal-owning client (bt_navigator) can see tracking state — the fleet
+  // adapter needs it for VDA5050 lastNodeId / nodeStates / edgeStates.
+  // transient_local so a late subscriber immediately learns where we are.
+  nav2_util::declare_parameter_if_not_declared(
+    node, "tracking_state_topic", rclcpp::ParameterValue(std::string("route_tracking_state")));
+  const std::string state_topic = node->get_parameter("tracking_state_topic").as_string();
+  state_pub_ = node->create_publisher<Feedback>(
+    state_topic, rclcpp::QoS(1).reliable().transient_local());
+  state_pub_->on_activate();
+  RCLCPP_INFO(logger_, "Route tracking state mirrored on '%s'", state_topic.c_str());
+
   operations_manager_ = std::make_unique<OperationsManager>(node, costmap_subscriber);
 }
 
@@ -141,6 +153,10 @@ void RouteTracker::publishFeedback(
   feedback->last_node_id = last_node_id;
   feedback->current_edge_id = edge_id;
   feedback->operations_triggered = operations;
+  // Topic first — publish_feedback consumes the unique_ptr.
+  if (state_pub_) {
+    state_pub_->publish(*feedback);
+  }
   action_server_->publish_feedback(std::move(feedback));
 }
 
