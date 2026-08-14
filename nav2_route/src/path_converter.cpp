@@ -29,6 +29,56 @@
 namespace nav2_route
 {
 
+namespace
+{
+
+// ⚠ The graph loader never stores a `double`. GeoJsonGraphFileLoader::
+//   convertMetaDataFromJson casts every JSON number to `float`, or to
+//   `int`/`unsigned int` when it has no fractional part. Metadata::getValue is
+//   std::any_cast, which is exact-type — so asking for `double` throws for
+//   *every* value a graph file can produce. Probe the types the loader can
+//   actually emit instead, using the pointer form of any_cast so a wrong type
+//   is a nullptr rather than an exception.
+bool readNumericMetadata(const Metadata & metadata, const std::string & key, double & out)
+{
+  const auto it = metadata.data.find(key);
+  if (it == metadata.data.end()) {
+    return false;
+  }
+  if (const auto * v = std::any_cast<float>(&it->second)) {
+    out = static_cast<double>(*v);
+    return true;
+  }
+  if (const auto * v = std::any_cast<double>(&it->second)) {
+    out = *v;
+    return true;
+  }
+  if (const auto * v = std::any_cast<int>(&it->second)) {
+    out = static_cast<double>(*v);
+    return true;
+  }
+  if (const auto * v = std::any_cast<unsigned int>(&it->second)) {
+    out = static_cast<double>(*v);
+    return true;
+  }
+  return false;   // present but not a number
+}
+
+bool readStringMetadata(const Metadata & metadata, const std::string & key, std::string & out)
+{
+  const auto it = metadata.data.find(key);
+  if (it == metadata.data.end()) {
+    return false;
+  }
+  if (const auto * v = std::any_cast<std::string>(&it->second)) {
+    out = *v;
+    return true;
+  }
+  return false;
+}
+
+}  // namespace
+
 void PathConverter::configure(nav2_util::LifecycleNode::SharedPtr node)
 {
   // Density to make path points
@@ -166,28 +216,27 @@ double PathConverter::resolveEdgeOrientation(
     return tangent_yaw;
   }
 
-  // ⚠ Metadata::getValue is std::any_cast under the hood: it throws if the
-  //   stored type differs from the one asked for. A graph author writing
-  //   "orientation": 0 instead of 0.0 would otherwise take the whole route
-  //   server down mid-plan. Fall back to the stock tangent instead — a graph
-  //   typo must not be able to stop the robot.
-  double orientation = std::numeric_limits<double>::quiet_NaN();
-  std::string type = "TANGENTIAL";
-  try {
-    double no_value = std::numeric_limits<double>::quiet_NaN();
-    orientation = edge->metadata.getValue<double>("orientation", no_value);
-    if (std::isnan(orientation)) {
-      return tangent_yaw;   // spec: undefined ⇒ any orientation is acceptable
-    }
-    std::string tangential = "TANGENTIAL";
-    type = edge->metadata.getValue<std::string>("orientationType", tangential);
-  } catch (const std::bad_any_cast & e) {
+  double orientation = 0.0;
+  if (edge->metadata.data.find("orientation") == edge->metadata.data.end()) {
+    return tangent_yaw;   // spec: undefined ⇒ any orientation is acceptable
+  }
+  if (!readNumericMetadata(edge->metadata, "orientation", orientation)) {
     RCLCPP_WARN(
       logger_,
-      "Edge %u carries orientation metadata of an unexpected type (%s); "
-      "falling back to the path tangent. Use floating point for 'orientation' "
-      "and a string for 'orientationType'.", edge->edgeid, e.what());
+      "Edge %u has an 'orientation' entry that is not a number; falling back to "
+      "the path tangent.", edge->edgeid);
     return tangent_yaw;
+  }
+
+  std::string type = "TANGENTIAL";
+  if (!readStringMetadata(edge->metadata, "orientationType", type)) {
+    if (edge->metadata.data.count("orientationType")) {
+      RCLCPP_WARN(
+        logger_,
+        "Edge %u has an 'orientationType' entry that is not a string; treating it "
+        "as 'TANGENTIAL' (the VDA5050 default).", edge->edgeid);
+    }
+    type = "TANGENTIAL";
   }
 
   if (type == "GLOBAL") {

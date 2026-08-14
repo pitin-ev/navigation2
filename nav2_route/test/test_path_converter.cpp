@@ -301,17 +301,68 @@ TEST(PathConverterTest, test_default_orientation_type_is_tangential)
     << "the VDA5050 default is TANGENTIAL, so 0 rad means 'along the edge'";
 }
 
-TEST(PathConverterTest, test_wrong_metadata_type_does_not_throw)
+// ── ★ The type the graph loader actually produces ───────────────────────────
+//
+// GeoJsonGraphFileLoader::convertMetaDataFromJson casts every fractional JSON
+// number to `float` — never `double`. Metadata::getValue is std::any_cast,
+// which is exact-type, so a getValue<double> reader throws for *every*
+// graph-authored orientation and the feature is inert in the field while every
+// double-typed unit test passes. These two tests are the guard against that:
+// they store the loader's own types.
+TEST(PathConverterTest, test_orientation_accepts_loader_float_type)
+{
+  auto node = std::make_shared<nav2_util::LifecycleNode>("po_float");
+  PathConverter converter;
+  converter.configure(node);
+
+  StraightRoute r;                              // edge runs +x, tangent 0
+  float orientation = static_cast<float>(M_PI / 2.0);
+  std::string type = "GLOBAL";
+  r.edge.metadata.setValue("orientation", orientation);
+  r.edge.metadata.setValue("orientationType", type);
+
+  ReroutingState info;
+  nav_msgs::msg::Path path;
+  ASSERT_NO_THROW(path = converter.densify(r.route, info, "map", rclcpp::Time(0)));
+
+  ASSERT_GT(path.poses.size(), 2u);
+  EXPECT_NEAR(yawOf(path.poses.front()), M_PI / 2.0, 1e-5)
+    << "float is what the geojson loader stores — reading only double makes "
+       "this feature silently do nothing on every real graph file";
+}
+
+TEST(PathConverterTest, test_orientation_accepts_integer_type)
+{
+  auto node = std::make_shared<nav2_util::LifecycleNode>("po_int");
+  PathConverter converter;
+  converter.configure(node);
+
+  StraightRoute r;
+  // "orientation": 0 in JSON has no fractional part, so the loader stores an
+  // int (or unsigned int). Writing 0 instead of 0.0 must not be a trap.
+  int orientation = 1;
+  r.edge.metadata.setValue("orientation", orientation);
+
+  ReroutingState info;
+  nav_msgs::msg::Path path;
+  ASSERT_NO_THROW(path = converter.densify(r.route, info, "map", rclcpp::Time(0)));
+
+  ASSERT_GT(path.poses.size(), 2u);
+  EXPECT_NEAR(yawOf(path.poses.front()), 1.0, 1e-6)
+    << "integers are a legitimate authoring form and must be honoured";
+}
+
+TEST(PathConverterTest, test_non_numeric_metadata_does_not_throw)
 {
   auto node = std::make_shared<nav2_util::LifecycleNode>("po_badtype");
   PathConverter converter;
   converter.configure(node);
 
   StraightRoute r;
-  // A graph author writing 0 instead of 0.0 stores an int. Metadata::getValue
-  // is std::any_cast underneath and would throw — mid-plan, inside the route
-  // server. A typo in a graph file must not be able to stop a 2 t robot.
-  int wrong = 1;
+  // A genuinely wrong type — a string where a number belongs. std::any_cast
+  // would throw mid-plan, inside the route server. A typo in a graph file must
+  // not be able to stop a 2 t robot.
+  std::string wrong = "sideways";
   r.edge.metadata.setValue("orientation", wrong);
 
   ReroutingState info;
