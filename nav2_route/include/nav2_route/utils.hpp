@@ -53,12 +53,21 @@ inline geometry_msgs::msg::PoseStamped toMsg(const float x, const float y)
  * @param graph Graph of nodes and edges
  * @param frame Frame ID to use
  * @param now Current time to use
+ * @param text_scale Height of the node/edge id labels [m]. RViz cannot scale
+ *        TEXT_VIEW_FACING markers on its own, so the only way to make the ids
+ *        legible on a site-sized map is to publish them bigger. The label
+ *        offsets scale with it so the text does not sit on top of the node it
+ *        belongs to. Default matches the stock 0.1.
  * @return MarkerArray of the graph
  */
 inline visualization_msgs::msg::MarkerArray toMsg(
-  const nav2_route::Graph & graph, const std::string & frame, const rclcpp::Time & now)
+  const nav2_route::Graph & graph, const std::string & frame, const rclcpp::Time & now,
+  double text_scale = 0.1)
 {
   visualization_msgs::msg::MarkerArray msg;
+  // Stock layout was authored against a 0.1 label; keep the spacing
+  // proportional so a bigger label stays readable rather than overlapping.
+  const double label_ratio = (text_scale > 0.0) ? text_scale / 0.1 : 1.0;
 
   visualization_msgs::msg::Marker nodes_marker;
   nodes_marker.header.frame_id = frame;
@@ -97,9 +106,10 @@ inline visualization_msgs::msg::MarkerArray toMsg(
   node_id_marker.action = 0;
   node_id_marker.ns = "route_graph_node_ids";
   node_id_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
-  node_id_marker.scale.x = 0.1;
-  node_id_marker.scale.y = 0.1;
-  node_id_marker.scale.z = 0.1;
+  // Only scale.z is honoured for TEXT_VIEW_FACING (it is the text height).
+  node_id_marker.scale.x = text_scale;
+  node_id_marker.scale.y = text_scale;
+  node_id_marker.scale.z = text_scale;
   node_id_marker.color.a = 1.0;
   node_id_marker.color.r = 1.0;
 
@@ -109,9 +119,9 @@ inline visualization_msgs::msg::MarkerArray toMsg(
   edge_id_marker.action = 0;
   edge_id_marker.ns = "route_graph_edge_ids";
   edge_id_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
-  edge_id_marker.scale.x = 0.1;
-  edge_id_marker.scale.y = 0.1;
-  edge_id_marker.scale.z = 0.1;
+  edge_id_marker.scale.x = text_scale;
+  edge_id_marker.scale.y = text_scale;
+  edge_id_marker.scale.z = text_scale;
   edge_id_marker.color.a = 1.0;
   edge_id_marker.color.g = 1.0;
 
@@ -122,7 +132,7 @@ inline visualization_msgs::msg::MarkerArray toMsg(
 
     // Add text for Node ID
     node_id_marker.id++;
-    node_id_marker.pose.position.x = node.coords.x + 0.07;
+    node_id_marker.pose.position.x = node.coords.x + 0.07 * label_ratio;
     node_id_marker.pose.position.y = node.coords.y;
     node_id_marker.text = std::to_string(node.nodeid);
     msg.markers.push_back(node_id_marker);
@@ -138,11 +148,11 @@ inline visualization_msgs::msg::MarkerArray toMsg(
       // Deal with overlapping bi-directional text markers by offsetting locations
       float y_offset = 0.0;
       if (node.nodeid > neighbor.end->nodeid) {
-        y_offset = 0.05;
+        y_offset = 0.05 * label_ratio;
       } else {
-        y_offset = -0.05;
+        y_offset = -0.05 * label_ratio;
       }
-      const float x_offset = 0.07;
+      const float x_offset = 0.07 * label_ratio;
 
       // Add text for Edge ID
       edge_id_marker.id++;

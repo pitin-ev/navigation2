@@ -79,11 +79,16 @@ RouteServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
     node, "global_frame", rclcpp::ParameterValue(std::string("map")));
   declare_parameter_if_not_declared(
     node, "max_planning_time", rclcpp::ParameterValue(2.0));
+  // RViz cannot resize TEXT_VIEW_FACING markers, so the node/edge ids are only
+  // as legible as we publish them. 0.1 m is unreadable on a site-sized map.
+  declare_parameter_if_not_declared(
+    node, "graph_vis_text_scale", rclcpp::ParameterValue(0.1));
 
   route_frame_ = node->get_parameter("route_frame").as_string();
   base_frame_ = node->get_parameter("base_frame").as_string();
   global_frame_ = node->get_parameter("global_frame").as_string();
   max_planning_time_ = node->get_parameter("max_planning_time").as_double();
+  graph_vis_text_scale_ = node->get_parameter("graph_vis_text_scale").as_double();
 
   // Create costmap subscriber
   nav2_util::declare_parameter_if_not_declared(
@@ -127,7 +132,8 @@ RouteServer::on_activate(const rclcpp_lifecycle::State & /*state*/)
   compute_route_server_->activate();
   compute_and_track_route_server_->activate();
   graph_vis_publisher_->on_activate();
-  graph_vis_publisher_->publish(utils::toMsg(graph_, route_frame_, this->now()));
+  graph_vis_publisher_->publish(
+    utils::toMsg(graph_, route_frame_, this->now(), graph_vis_text_scale_));
   createBond();
   return nav2_util::CallbackReturn::SUCCESS;
 }
@@ -379,7 +385,8 @@ void RouteServer::setRouteGraph(
   try {
     if (graph_loader_->loadGraphFromFile(graph_, id_to_graph_map_, request->graph_filepath)) {
       goal_intent_extractor_->setGraph(graph_, &id_to_graph_map_);
-      graph_vis_publisher_->publish(utils::toMsg(graph_, route_frame_, this->now()));
+      graph_vis_publisher_->publish(
+        utils::toMsg(graph_, route_frame_, this->now(), graph_vis_text_scale_));
       response->success = true;
       return;
     }

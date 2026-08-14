@@ -227,6 +227,7 @@ protected:
   GraphToIDMap id_to_graph_map_;
   std::string route_frame_, base_frame_, global_frame_;
   double max_planning_time_;
+  double graph_vis_text_scale_{0.1};   ///< [m] route_graph 노드/엣지 id 글자 높이
 };
 
 }  // namespace nav2_route

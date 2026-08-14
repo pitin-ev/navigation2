@@ -179,6 +179,63 @@ TEST(UtilsTest, test_to_visualization_msg_conversion)
   }
 }
 
+// RViz cannot resize TEXT_VIEW_FACING markers, so legibility of the node/edge
+// ids is decided entirely by what the server publishes. 0.1 m is unreadable on
+// a site-sized map, hence the `graph_vis_text_scale` parameter.
+TEST(utils, test_graph_vis_text_scale)
+{
+  Graph graph;
+  graph.resize(2);
+  graph[0].nodeid = 1;
+  graph[0].coords.x = 0.0;
+  graph[0].coords.y = 0.0;
+  graph[1].nodeid = 2;
+  graph[1].coords.x = 4.0;
+  graph[1].coords.y = 0.0;
+  EdgeCost default_cost;
+  graph[0].addEdge(default_cost, &graph[1], 10);
+
+  const std::string frame = "map";
+  const rclcpp::Time time(0, 0);
+
+  // Default keeps the stock size, so existing setups are untouched.
+  for (const auto & marker : utils::toMsg(graph, frame, time).markers) {
+    if (marker.type == visualization_msgs::msg::Marker::TEXT_VIEW_FACING) {
+      EXPECT_DOUBLE_EQ(marker.scale.z, 0.1);
+    }
+  }
+
+  auto big = utils::toMsg(graph, frame, time, 0.5);
+  size_t text_markers = 0;
+  for (const auto & marker : big.markers) {
+    if (marker.type != visualization_msgs::msg::Marker::TEXT_VIEW_FACING) {
+      continue;
+    }
+    ++text_markers;
+    // scale.z is the only field RViz honours for text height.
+    EXPECT_DOUBLE_EQ(marker.scale.z, 0.5)
+      << "text height must follow the requested scale";
+  }
+  EXPECT_GT(text_markers, 0u) << "no text markers to check -- test is vacuous";
+
+  // Labels must move away from their node proportionally, otherwise a bigger
+  // font just lands on top of the node marker it is labelling.
+  double small_dx = 0.0, big_dx = 0.0;
+  for (const auto & marker : utils::toMsg(graph, frame, time).markers) {
+    if (marker.ns == "route_graph_node_ids" && marker.text == "1") {
+      small_dx = marker.pose.position.x - graph[0].coords.x;
+    }
+  }
+  for (const auto & marker : big.markers) {
+    if (marker.ns == "route_graph_node_ids" && marker.text == "1") {
+      big_dx = marker.pose.position.x - graph[0].coords.x;
+    }
+  }
+  EXPECT_GT(small_dx, 0.0);
+  EXPECT_NEAR(big_dx, small_dx * 5.0, 1e-9)
+    << "label offset must scale with the font, not stay at the 0.1 m layout";
+}
+
 TEST(UtilsTest, test_normalized_dot)
 {
   // Vectors are orthogonal
