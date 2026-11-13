@@ -380,3 +380,59 @@ TEST(GoalIntentExtractorTest, test_pruning)
   rtn = extractor2.pruneStartandGoal(route, poses_goal, rerouting_info);
   EXPECT_EQ(rtn.edges.size(), 2u);
 }
+
+TEST(GoalIntentExtractorTest, test_pruning_keeps_single_edge)
+{
+  // pitin: a single-edge route must never be pruned down to zero edges
+  auto node = std::make_shared<nav2_util::LifecycleNode>("goal_intent_extractor_single_test");
+  GoalIntentExtractorWrapper extractor;
+  Graph graph;
+  GraphToIDMap id_map;
+  std::shared_ptr<nav2_costmap_2d::CostmapSubscriber> costmap_subscriber = nullptr;
+  extractor.configure(node, graph, &id_map, nullptr, costmap_subscriber, "map", "map", "base_link");
+
+  nav2_msgs::action::ComputeRoute::Goal raw_goal;
+  raw_goal.use_poses = true;
+  auto poses_goal = std::make_shared<const nav2_msgs::action::ComputeRoute::Goal>(raw_goal);
+
+  Node node1, node2;
+  node1.nodeid = 15;
+  node1.coords.x = 0.0;
+  node1.coords.y = 0.0;
+  node1.search_state.traversal_cost = 0.0;
+  node2.nodeid = 11;
+  node2.coords.x = 2.0;
+  node2.coords.y = 0.0;
+  node2.search_state.traversal_cost = 2.0;
+  DirectionalEdge edge1;
+  edge1.edgeid = 66;
+  edge1.start = &node1;
+  edge1.end = &node2;
+
+  Route route;
+  route.route_cost = 2.0;
+  route.start_node = &node1;
+  route.edges.push_back(&edge1);
+
+  ReroutingState rerouting_info;
+  rerouting_info.first_time = true;
+
+  // Robot overshot the start node by 0.21 m along the edge (observed in simulation)
+  geometry_msgs::msg::PoseStamped start, goal;
+  start.pose.position.x = 0.21;
+  goal.pose.position.x = 2.0;
+  extractor.setStartAndGoal(start, goal);
+  auto rtn = extractor.pruneStartandGoal(route, poses_goal, rerouting_info);
+  EXPECT_EQ(rtn.edges.size(), 1u);
+  EXPECT_EQ(rtn.start_node->nodeid, 15u);
+  EXPECT_EQ(rtn.edges[0]->edgeid, 66u);
+  EXPECT_EQ(rtn.route_cost, 2.0);
+
+  // Goal side: goal well before the end node of the only edge, still kept
+  start.pose.position.x = 0.0;
+  goal.pose.position.x = 1.5;
+  extractor.setStartAndGoal(start, goal);
+  rtn = extractor.pruneStartandGoal(route, poses_goal, rerouting_info);
+  EXPECT_EQ(rtn.edges.size(), 1u);
+  EXPECT_EQ(rtn.edges.back()->end->nodeid, 11u);
+}

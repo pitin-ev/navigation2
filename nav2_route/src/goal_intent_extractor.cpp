@@ -254,7 +254,13 @@ Route GoalIntentExtractor::pruneStartandGoal(
   float vpy = start_.pose.position.y - first->coords.y;
   float dot_prod = utils::normalizedDot(vrx, vry, vpx, vpy);
   Coordinates closest_pt_on_edge = utils::findClosestPoint(start_, first->coords, next->coords);
-  if (dot_prod > EPSILON &&  // A projection exists
+  // pitin: never prune the only edge. A robot that overshot the start node of a
+  // single-edge request (e.g. stopped 0.2 m past node A, then sent A->B) would get a
+  // route with 0 edges and a 1-pose path; the controller then has nothing to follow
+  // and the task fails by progress timeout. Keeping the edge lets the controller
+  // project the robot onto it and continue.
+  if (pruned_route.edges.size() > 1u &&
+    dot_prod > EPSILON &&  // A projection exists
     hypotf(vpx, vpy) > min_dist_from_start_ &&  // We're not on the node to prune entire edge
     utils::distance(closest_pt_on_edge, start_) <= max_dist_from_edge_)  // Close enough to edge
   {
@@ -285,7 +291,9 @@ Route GoalIntentExtractor::pruneStartandGoal(
 
   dot_prod = utils::normalizedDot(vrx, vry, vpx, vpy);
   closest_pt_on_edge = utils::findClosestPoint(goal_, next->coords, last->coords);
-  if (dot_prod < -EPSILON &&  // A projection exists
+  // pitin: same as the start side, never prune the last remaining edge
+  if (pruned_route.edges.size() > 1u &&
+    dot_prod < -EPSILON &&  // A projection exists
     hypotf(vpx, vpy) > min_dist_from_goal_ &&  // We're not on the node to prune entire edge
     utils::distance(closest_pt_on_edge, goal_) <= max_dist_from_edge_)  // Close enough to edge
   {
