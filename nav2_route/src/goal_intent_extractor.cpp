@@ -266,7 +266,14 @@ Route GoalIntentExtractor::pruneStartandGoal(
   {
     // Record the pruned edge information if its the same edge as previously routed so that
     // the tracker can seed this information into its state to proceed with its task losslessly
-    if (last_curr_edge && last_curr_edge->edgeid == pruned_route.edges.front()->edgeid) {
+    // pitin: also on the first request. Without it the path starts at the next node and
+    // the tracker waits for that node as a start node (boundary radius only). A robot
+    // that stopped just past the first node then cuts straight to the path, may never
+    // enter the boundary radius, and tracking never completes (observed in the amr1
+    // route simulation: 0.13 m past node 11, route 11->5->4->3 hung after the goal).
+    if (first_time ||
+      (last_curr_edge && last_curr_edge->edgeid == pruned_route.edges.front()->edgeid))
+    {
       rerouting_info.closest_pt_on_edge = closest_pt_on_edge;
       rerouting_info.curr_edge = pruned_route.edges.front();
     }

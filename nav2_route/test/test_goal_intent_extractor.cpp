@@ -425,8 +425,38 @@ TEST(GoalIntentExtractorTest, test_pruning_keeps_single_edge)
   auto rtn = extractor.pruneStartandGoal(route, poses_goal, rerouting_info);
   EXPECT_EQ(rtn.edges.size(), 1u);
   EXPECT_EQ(rtn.start_node->nodeid, 15u);
+  EXPECT_EQ(rerouting_info.curr_edge, nullptr);
   EXPECT_EQ(rtn.edges[0]->edgeid, 66u);
   EXPECT_EQ(rtn.route_cost, 2.0);
+
+  // Multi-edge request on the first call: the pruned first edge is seeded so the path
+  // starts at the robot's projection and the tracker continues along that edge
+  Node node3;
+  node3.nodeid = 5;
+  node3.coords.x = 2.0;
+  node3.coords.y = -2.0;
+  node3.search_state.traversal_cost = 2.0;
+  DirectionalEdge edge2;
+  edge2.edgeid = 67;
+  edge2.start = &node2;
+  edge2.end = &node3;
+  Route route2 = route;
+  route2.route_cost = 4.0;
+  route2.edges.push_back(&edge2);
+  ReroutingState first_info;
+  first_info.first_time = true;
+  start.pose.position.x = 0.13;
+  start.pose.position.y = 0.0;
+  goal.pose.position.x = 2.0;
+  goal.pose.position.y = -2.0;
+  extractor.setStartAndGoal(start, goal);
+  rtn = extractor.pruneStartandGoal(route2, poses_goal, first_info);
+  EXPECT_EQ(rtn.edges.size(), 1u);
+  EXPECT_EQ(rtn.start_node->nodeid, 11u);
+  ASSERT_NE(first_info.curr_edge, nullptr);
+  EXPECT_EQ(first_info.curr_edge->edgeid, 66u);
+  EXPECT_NEAR(first_info.closest_pt_on_edge.x, 0.13, 0.01);
+  EXPECT_FALSE(first_info.first_time);
 
   // Goal side: goal well before the end node of the only edge, still kept
   start.pose.position.x = 0.0;
